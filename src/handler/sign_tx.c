@@ -30,15 +30,25 @@ bool verify_change(change_output_info_t *info, tx_output_t output) {
     cx_ecfp_public_key_t public_key = {0};
     cx_ecfp_private_key_t private_key = {0};
     uint8_t chain_code[32];
+    int error = 0;
 
-    derive_private_key(&private_key, chain_code, info->path.path, info->path.length);
-    init_public_key(&private_key, &public_key);
-    compress_public_key(public_key.W);
-    hash160(public_key.W, 33, hash);
+    if (info == NULL) {
+        return false;
+    }
 
+    CX_CHECK(derive_private_key(&private_key, chain_code, info->path.path, info->path.length));
+    CX_CHECK(init_public_key(&private_key, &public_key));
+    CX_CHECK(compress_public_key(public_key.W, sizeof(public_key.W) / sizeof(public_key.W[0])));
+    CX_CHECK(hash160(public_key.W, 33, hash, PUBKEY_HASH_LEN));
+
+end:
     // erase data
     explicit_bzero(&private_key, sizeof(private_key));
     explicit_bzero(&public_key, sizeof(public_key));
+
+    if (error) {
+        THROW(SW_INTERNAL_ERROR);
+    }
 
     // 0 means equals
     return memcmp(hash, output.pubkey_hash, PUBKEY_HASH_LEN) == 0;
@@ -219,15 +229,16 @@ bool sign_tx_with_key() {
     cx_ecfp_private_key_t private_key = {0};
 
     uint8_t chain_code[32];
+    cx_err_t error = CX_OK;
 
-    derive_private_key(&private_key,
-                       chain_code,
-                       G_context.bip32_path.path,
-                       G_context.bip32_path.length);
+    CX_CHECK(derive_private_key(&private_key,
+                                chain_code,
+                                G_context.bip32_path.path,
+                                G_context.bip32_path.length));
 
     if (G_context.tx_info.sighash_all[0] == '\0') {
         // finish sha256 from data
-        CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+        CX_CHECK(cx_hash_no_throw(&G_context.tx_info.sha256.header,
                                   CX_LAST,
                                   G_context.tx_info.sighash_all,
                                   0,
@@ -235,7 +246,7 @@ bool sign_tx_with_key() {
                                   32));
         // now get second sha256
         cx_sha256_init(&G_context.tx_info.sha256);
-        CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+        CX_CHECK(cx_hash_no_throw(&G_context.tx_info.sha256.header,
                                   CX_LAST,
                                   G_context.tx_info.sighash_all,
                                   32,
@@ -245,7 +256,7 @@ bool sign_tx_with_key() {
 
     uint8_t out[256] = {0};
     size_t sig_size = 256;
-    CX_THROW(cx_ecdsa_sign_no_throw(&private_key,
+    CX_CHECK(cx_ecdsa_sign_no_throw(&private_key,
                                     CX_LAST | CX_RND_RFC6979,
                                     CX_SHA256,
                                     G_context.tx_info.sighash_all,
@@ -254,7 +265,12 @@ bool sign_tx_with_key() {
                                     &sig_size,
                                     NULL));
 
+end:
     explicit_bzero(&private_key, sizeof(private_key));
+
+    if (error) {
+        return io_send_sw(SW_INTERNAL_ERROR) > 0;
+    }
 
     // exchange signature
     // io_send_response < 0 means faillure
