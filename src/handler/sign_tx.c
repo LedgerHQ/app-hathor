@@ -196,12 +196,12 @@ void read_tx_data(buffer_t *cdata) {
 void sighash_all_hash(buffer_t *cdata) {
     // cx_hash returns the size of the hash after adding the data, we can safely ignore it
 
-    cx_hash(&G_context.tx_info.sha256.header,  // hash context pointer
-            0,                                 // mode (supports: CX_LAST)
-            cdata->ptr + cdata->offset,        // Input data to add to current hash
-            cdata->size - cdata->offset,       // Length of input data
-            NULL,
-            0);  // output (if flag CX_LAST was set)
+    CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,  // hash context pointer
+                              0,                                 // mode (supports: CX_LAST)
+                              cdata->ptr + cdata->offset,   // Input data to add to current hash
+                              cdata->size - cdata->offset,  // Length of input data
+                              NULL,
+                              0));  // output (if flag CX_LAST was set)
 }
 
 /**
@@ -217,7 +217,6 @@ bool sign_tx_with_key() {
     }
 
     cx_ecfp_private_key_t private_key = {0};
-    cx_ecfp_public_key_t public_key = {0};
 
     uint8_t chain_code[32];
 
@@ -225,38 +224,37 @@ bool sign_tx_with_key() {
                        chain_code,
                        G_context.bip32_path.path,
                        G_context.bip32_path.length);
-    init_public_key(&private_key, &public_key);
 
     if (G_context.tx_info.sighash_all[0] == '\0') {
         // finish sha256 from data
-        cx_hash(&G_context.tx_info.sha256.header,
-                CX_LAST,
-                G_context.tx_info.sighash_all,
-                0,
-                G_context.tx_info.sighash_all,
-                32);
+        CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+                                  CX_LAST,
+                                  G_context.tx_info.sighash_all,
+                                  0,
+                                  G_context.tx_info.sighash_all,
+                                  32));
         // now get second sha256
         cx_sha256_init(&G_context.tx_info.sha256);
-        cx_hash(&G_context.tx_info.sha256.header,
-                CX_LAST,
-                G_context.tx_info.sighash_all,
-                32,
-                G_context.tx_info.sighash_all,
-                32);
+        CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+                                  CX_LAST,
+                                  G_context.tx_info.sighash_all,
+                                  32,
+                                  G_context.tx_info.sighash_all,
+                                  32));
     }
 
     uint8_t out[256] = {0};
-    size_t sig_size = cx_ecdsa_sign(&private_key,
+    size_t sig_size = 256;
+    CX_THROW(cx_ecdsa_sign_no_throw(&private_key,
                                     CX_LAST | CX_RND_RFC6979,
                                     CX_SHA256,
                                     G_context.tx_info.sighash_all,
                                     32,
                                     out,
-                                    256,
-                                    NULL);
+                                    &sig_size,
+                                    NULL));
 
     explicit_bzero(&private_key, sizeof(private_key));
-    explicit_bzero(&public_key, sizeof(public_key));
 
     // exchange signature
     // io_send_response < 0 means faillure
