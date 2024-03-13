@@ -18,6 +18,9 @@
 #include "../handler/reset_token_signatures.h"
 
 int apdu_dispatcher(const command_t *cmd) {
+    if (cmd == NULL) {
+        return io_send_sw(SW_INTERNAL_ERROR);
+    }
     if (cmd->cla != CLA) {
         return io_send_sw(SW_CLA_NOT_SUPPORTED);
     }
@@ -118,7 +121,7 @@ int apdu_dispatcher(const command_t *cmd) {
             buf.size = cmd->lc;
             buf.offset = 0;
 
-            return handler_reset_token_signatures(&buf);
+            return handler_reset_token_signatures();
 
         default:
             return io_send_sw(SW_INS_NOT_SUPPORTED);
