@@ -326,7 +326,7 @@ bool prepare_display_output() {
         strlcpy(symbol, token->symbol, MAX_TOKEN_SYMBOL_LEN + 1);
         symbol_len = strlen(token->symbol);
     }
-    strlcpy(g_amount, symbol, 30);
+    strlcpy(g_amount, symbol, MAX_TOKEN_SYMBOL_LEN + 1);
     g_amount[symbol_len] = ' ';
     format_value(output.value, g_amount + symbol_len + 1);
     return false;
