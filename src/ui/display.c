@@ -1,6 +1,3 @@
-#pragma GCC diagnostic ignored "-Wformat-invalid-specifier"  // snprintf
-#pragma GCC diagnostic ignored "-Wformat-extra-args"         // snprintf
-
 #include <stdint.h>
 #include <string.h>
 
@@ -24,9 +21,9 @@ static action_validate_cb g_validate_callback;
 static char g_amount[30];
 static char g_output_index[10];
 static char g_address[B58_ADDRESS_LEN];
-static char g_token_symbol[6];
-static char g_token_name[31];
-static char g_token_uid[65];
+static char g_token_symbol[MAX_TOKEN_SYMBOL_LEN + 1];
+static char g_token_name[MAX_TOKEN_NAME_LEN + 1];
+static char g_token_uid[1 + 2 * TOKEN_UID_LEN];
 #ifdef UI_SHOW_PATH
 static char g_bip32_path[60];
 
@@ -234,7 +231,7 @@ bool check_output_index_state() {
 }
 
 void inplace_selection_sort(size_t len, uint8_t* list) {
-    size_t i, j, position;
+    size_t i = 0, j = 0, position = 0;
     uint8_t tmp;
     for (i = 0; i < (len - 1); i++) {
         position = i;
@@ -255,7 +252,7 @@ bool skip_change_outputs() {
         return false;
     }
     // confirmed outputs holds the true current output index
-    uint8_t change_indices[1 + TX_MAX_TOKENS];
+    uint8_t change_indices[1 + TX_MAX_TOKENS] = {0};
     for (uint8_t i = 0; i < G_context.tx_info.change_len; i++) {
         change_indices[i] = G_context.tx_info.change_info[i].index;
     }
@@ -304,9 +301,14 @@ bool prepare_display_output() {
     memset(g_address, 0, sizeof(g_address));
     char b58address[B58_ADDRESS_LEN] = {0};
     uint8_t address[ADDRESS_LEN] = {0};
-    address_from_pubkey_hash(output.pubkey_hash, address);
+    if (address_from_pubkey_hash(output.pubkey_hash, PUBKEY_HASH_LEN, address, ADDRESS_LEN)) {
+        explicit_bzero(&G_context, sizeof(G_context));
+        io_send_sw(SW_INTERNAL_ERROR);
+        ui_menu_main();
+        return true;
+    }
     base58_encode(address, ADDRESS_LEN, b58address, B58_ADDRESS_LEN);
-    memmove(g_address, b58address, sizeof(b58address));
+    memmove(g_address, b58address, B58_ADDRESS_LEN);
 
     // set g_ammount (HTR value)
     memset(g_amount, 0, sizeof(g_amount));
@@ -316,15 +318,15 @@ bool prepare_display_output() {
 
     // token_index == 0 means HTR, else use token_index-1 as index on the tokens array
     if (token_index == 0) {
-        strcpy(symbol, "HTR");
+        strlcpy(symbol, "HTR", 4);
         symbol_len = 3;
     } else {
         // custom token
         token_symbol_t* token = G_context.tx_info.tokens[token_index - 1];
-        strcpy(symbol, token->symbol);
+        strlcpy(symbol, token->symbol, MAX_TOKEN_SYMBOL_LEN + 1);
         symbol_len = strlen(token->symbol);
     }
-    strcpy(g_amount, symbol);
+    strlcpy(g_amount, symbol, MAX_TOKEN_SYMBOL_LEN + 1);
     g_amount[symbol_len] = ' ';
     format_value(output.value, g_amount + symbol_len + 1);
     return false;
@@ -432,25 +434,35 @@ int ui_display_confirm_address() {
 
     cx_ecfp_private_key_t private_key = {0};
     cx_ecfp_public_key_t public_key = {0};
-    uint8_t chain_code[32];
+    uint8_t chain_code[CHAINCODE_LEN];
+    cx_err_t error = CX_OK;
 
     uint8_t address[ADDRESS_LEN] = {0};
     char b58address[B58_ADDRESS_LEN] = {0};
 
     // derive for bip32 path
-    derive_private_key(&private_key,
-                       chain_code,
-                       G_context.bip32_path.path,
-                       G_context.bip32_path.length);
-    init_public_key(&private_key, &public_key);
+    CX_CHECK(derive_private_key(&private_key,
+                                chain_code,
+                                G_context.bip32_path.path,
+                                G_context.bip32_path.length));
+    CX_CHECK(init_public_key(&private_key, &public_key));
 
     // Generate address from public key
-    address_from_pubkey(&public_key, address);
+    CX_CHECK(address_from_pubkey(&public_key, address, ADDRESS_LEN));
     base58_encode(address, ADDRESS_LEN, b58address, B58_ADDRESS_LEN);
-    memmove(g_address, b58address, sizeof(b58address));
+    memmove(g_address, b58address, B58_ADDRESS_LEN);
+
+end:
 
     explicit_bzero(&private_key, sizeof(private_key));
     explicit_bzero(&public_key, sizeof(public_key));
+
+    if (error != CX_OK) {
+        explicit_bzero(&G_context, sizeof(G_context));
+        io_send_sw(SW_INTERNAL_ERROR);
+        ui_menu_main();
+        return 1;
+    }
 
     g_validate_callback = &ui_action_confirm_address;
 
@@ -459,7 +471,7 @@ int ui_display_confirm_address() {
     return 0;
 }
 
-// Reset token signatures: ui_display_confirm_address
+// Reset token signatures: ui_confirm_reset_token_signatures
 
 void ui_confirm_reset_token_signatures(bool choice) {
     if (choice) {
@@ -473,7 +485,7 @@ void ui_confirm_reset_token_signatures(bool choice) {
     ui_menu_main();
 }
 
-/* FLOW to display confirm address:
+/* FLOW to display confirm reset token signatures:
  *  #1 screen: eye icon + "Reset token signatures"
  *  #2 screen: warning message
  *  #3 screen: approve button
@@ -510,6 +522,13 @@ UX_FLOW(ux_display_sign_token_data,
         FLOW_LOOP);
 
 int ui_display_sign_token_data() {
+    if ((G_context.token.symbol_len > MAX_TOKEN_SYMBOL_LEN) ||
+        (G_context.token.name_len > MAX_TOKEN_NAME_LEN)) {
+        explicit_bzero(&G_context, sizeof(G_context));
+        io_send_sw(SW_INTERNAL_ERROR);
+        ui_menu_main();
+        return 1;
+    }
     // show token information
     // copy symbol
     memmove(g_token_symbol, G_context.token.symbol, G_context.token.symbol_len);

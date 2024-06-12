@@ -30,15 +30,25 @@ bool verify_change(change_output_info_t *info, tx_output_t output) {
     cx_ecfp_public_key_t public_key = {0};
     cx_ecfp_private_key_t private_key = {0};
     uint8_t chain_code[32];
+    int error = 0;
 
-    derive_private_key(&private_key, chain_code, info->path.path, info->path.length);
-    init_public_key(&private_key, &public_key);
-    compress_public_key(public_key.W);
-    hash160(public_key.W, 33, hash);
+    if (info == NULL) {
+        return false;
+    }
 
+    CX_CHECK(derive_private_key(&private_key, chain_code, info->path.path, info->path.length));
+    CX_CHECK(init_public_key(&private_key, &public_key));
+    CX_CHECK(compress_public_key(public_key.W, sizeof(public_key.W) / sizeof(public_key.W[0])));
+    CX_CHECK(hash160(public_key.W, 33, hash, PUBKEY_HASH_LEN));
+
+end:
     // erase data
     explicit_bzero(&private_key, sizeof(private_key));
     explicit_bzero(&public_key, sizeof(public_key));
+
+    if (error) {
+        THROW(SW_INTERNAL_ERROR);
+    }
 
     // 0 means equals
     return memcmp(hash, output.pubkey_hash, PUBKEY_HASH_LEN) == 0;
@@ -113,6 +123,8 @@ void read_change_info_old_protocol(uint8_t change_byte, buffer_t *cdata) {
         THROW(SW_WRONG_DATA_LENGTH);
     }
 
+    // buffer+1 has 4*MAX_BIP32_PATH capacity
+    // buffer[0] is limited to MAX_BIP32_PATH
     memmove(buffer + 1, cdata->ptr + cdata->offset, 4 * buffer[0]);
     buffer_seek_cur(cdata, 4 * buffer[0]);
     buffer_t bufdata = {.ptr = buffer, .size = 1 + 4 * MAX_BIP32_PATH, .offset = 0};
@@ -196,12 +208,12 @@ void read_tx_data(buffer_t *cdata) {
 void sighash_all_hash(buffer_t *cdata) {
     // cx_hash returns the size of the hash after adding the data, we can safely ignore it
 
-    cx_hash(&G_context.tx_info.sha256.header,  // hash context pointer
-            0,                                 // mode (supports: CX_LAST)
-            cdata->ptr + cdata->offset,        // Input data to add to current hash
-            cdata->size - cdata->offset,       // Length of input data
-            NULL,
-            0);  // output (if flag CX_LAST was set)
+    CX_THROW(cx_hash_no_throw(&G_context.tx_info.sha256.header,  // hash context pointer
+                              0,                                 // mode (supports: CX_LAST)
+                              cdata->ptr + cdata->offset,   // Input data to add to current hash
+                              cdata->size - cdata->offset,  // Length of input data
+                              NULL,
+                              0));  // output (if flag CX_LAST was set)
 }
 
 /**
@@ -217,46 +229,50 @@ bool sign_tx_with_key() {
     }
 
     cx_ecfp_private_key_t private_key = {0};
-    cx_ecfp_public_key_t public_key = {0};
 
     uint8_t chain_code[32];
+    cx_err_t error = CX_OK;
 
-    derive_private_key(&private_key,
-                       chain_code,
-                       G_context.bip32_path.path,
-                       G_context.bip32_path.length);
-    init_public_key(&private_key, &public_key);
+    CX_CHECK(derive_private_key(&private_key,
+                                chain_code,
+                                G_context.bip32_path.path,
+                                G_context.bip32_path.length));
 
     if (G_context.tx_info.sighash_all[0] == '\0') {
         // finish sha256 from data
-        cx_hash(&G_context.tx_info.sha256.header,
-                CX_LAST,
-                G_context.tx_info.sighash_all,
-                0,
-                G_context.tx_info.sighash_all,
-                32);
+        CX_CHECK(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+                                  CX_LAST,
+                                  G_context.tx_info.sighash_all,
+                                  0,
+                                  G_context.tx_info.sighash_all,
+                                  32));
         // now get second sha256
         cx_sha256_init(&G_context.tx_info.sha256);
-        cx_hash(&G_context.tx_info.sha256.header,
-                CX_LAST,
-                G_context.tx_info.sighash_all,
-                32,
-                G_context.tx_info.sighash_all,
-                32);
+        CX_CHECK(cx_hash_no_throw(&G_context.tx_info.sha256.header,
+                                  CX_LAST,
+                                  G_context.tx_info.sighash_all,
+                                  32,
+                                  G_context.tx_info.sighash_all,
+                                  32));
     }
 
     uint8_t out[256] = {0};
-    size_t sig_size = cx_ecdsa_sign(&private_key,
+    size_t sig_size = 256;
+    CX_CHECK(cx_ecdsa_sign_no_throw(&private_key,
                                     CX_LAST | CX_RND_RFC6979,
                                     CX_SHA256,
                                     G_context.tx_info.sighash_all,
                                     32,
                                     out,
-                                    256,
-                                    NULL);
+                                    &sig_size,
+                                    NULL));
 
+end:
     explicit_bzero(&private_key, sizeof(private_key));
-    explicit_bzero(&public_key, sizeof(public_key));
+
+    if (error) {
+        return io_send_sw(SW_INTERNAL_ERROR) > 0;
+    }
 
     // exchange signature
     // io_send_response < 0 means faillure
@@ -339,7 +355,6 @@ bool _decode_elements() {
         // Safely discard data
         G_context.tx_info.remaining_inputs--;
         G_context.tx_info.buffer_len -= TX_INPUT_LEN;
-        // G_context.tx_info.elem_type = ELEM_INPUT;
         memmove(G_context.tx_info.buffer,
                 G_context.tx_info.buffer + TX_INPUT_LEN,
                 G_context.tx_info.buffer_len);
