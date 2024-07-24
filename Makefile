@@ -72,10 +72,6 @@ else
     DEFINES += HAVE_BAGL_FONT_OPEN_SANS_LIGHT_16PX
 endif
 
-# Ledger: add the "Pending security review" disclaimer
-APP_LOAD_PARAMS += --tlvraw 9F:01
-DEFINES += HAVE_PENDING_REVIEW_SCREEN
-
 DEBUG = 0
 ifneq ($(DEBUG),0)
     DEFINES += HAVE_PRINTF
