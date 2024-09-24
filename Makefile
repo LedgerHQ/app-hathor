@@ -17,8 +17,7 @@ endif
 include $(BOLOS_SDK)/Makefile.defines
 
 APP_LOAD_PARAMS  = --curve secp256k1
-APP_LOAD_PARAMS += --appFlags 0x240
-# APP_LOAD_PARAMS += --appFlags 0x40
+APP_LOAD_PARAMS += --appFlags 0x200
 APP_LOAD_PARAMS += --path "44'/$(HATHOR_BIP44_CODE)'/0'"
 APP_LOAD_PARAMS += $(COMMON_LOAD_PARAMS)
 
@@ -34,7 +33,7 @@ $(info NETWORK=$(NETWORK))
 
 APPVERSION_M = 1
 APPVERSION_N = 1
-APPVERSION_P = 0
+APPVERSION_P = 1
 APPVERSION   = "$(APPVERSION_M).$(APPVERSION_N).$(APPVERSION_P)"
 
 ifeq ($(TARGET_NAME),TARGET_NANOS)
@@ -72,10 +71,6 @@ else
     DEFINES += HAVE_BAGL_FONT_OPEN_SANS_EXTRABOLD_11PX
     DEFINES += HAVE_BAGL_FONT_OPEN_SANS_LIGHT_16PX
 endif
-
-# Ledger: add the "Pending security review" disclaimer
-APP_LOAD_PARAMS += --tlvraw 9F:01
-DEFINES += HAVE_PENDING_REVIEW_SCREEN
 
 DEBUG = 0
 ifneq ($(DEBUG),0)
